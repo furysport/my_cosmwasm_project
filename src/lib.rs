@@ -70,18 +70,24 @@ fn calculate_total_rewards(api: &dyn Api, staking_module_address: &str) -> StdRe
 }
 
 // Helper function to distribute rewards to a list of accounts
-fn distribute_rewards_to_accounts(storage: &mut dyn Storage, stakers: Vec<CanonicalAddr>, reward_per_staker: u64) -> StdResult<()> {
-    for staker in stakers {
-    if let Err(err) = distribute_reward(storage, &staker, reward_per_staker) {
-        return Err(err);
-    }
-}
-    Ok(Response::new()
-    .add_message(msg)
-    .add_attribute("action", "distribute_rewards")
-    .add_attribute("reward_per_staker", reward_per_staker.to_string())
-    .add_attribute("total_rewards_distributed", total_rewards.to_string()))?;
+fn distribute_rewards_to_accounts(
+    storage: &mut dyn Storage,
+    stakers: Vec<CanonicalAddr>,
+    reward_per_staker: u64,
+) -> StdResult<Response> {
+    let mut total_rewards = 0u64;
 
+    for staker in stakers.iter() {
+        distribute_reward(storage, staker, reward_per_staker)?;
+
+        // Accumulate rewards for total_rewards attribute
+        total_rewards += reward_per_staker;
+    }
+
+    Ok(Response::new()
+        .add_attribute("action", "distribute_rewards")
+        .add_attribute("reward_per_staker", reward_per_staker.to_string())
+        .add_attribute("total_rewards_distributed", total_rewards.to_string())?)
 }
 
 // Helper function to distribute rewards to an account
