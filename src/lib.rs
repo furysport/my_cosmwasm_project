@@ -1,10 +1,9 @@
 use cosmwasm_std::{
     AllBalanceResponse, Api, CanonicalAddr, CosmosMsg, DepsMut, Env, MessageInfo, Response,
-    StdError, StdResult, WasmMsg, WasmQuery, BankQuery, Binary, QueryRequest,
+    StdError, StdResult, WasmMsg, WasmQuery, BankQuery, Binary, QueryRequest, QueryStakersMsg, QueryRewardsMsg, StakingModuleMsg
 };
-use cosmwasm_std::serde::{from_slice, to_binary};
 
-
+use cosmwasm_std::{BankMsg, Coin, Uint128};
 
 const STAKING_MODULE_ADDRESS: &str = "staking"; // Replace with the actual staking module address
 const ADMIN_ADDRESS: &str = "admin"; // Replace with the contract admin address
@@ -17,7 +16,7 @@ struct MyContract;
 impl MyContract {
     fn distribute_rewards(deps: DepsMut, env: Env, _info: MessageInfo) -> StdResult<Response> {
         // Check if the sender is the contract admin
-        if info.sender != deps.api.addr_canonicalize(ADMIN_ADDRESS)? {
+        if _info.sender != deps.api.addr_canonicalize(ADMIN_ADDRESS)? {
             return Err(StdError::Unauthorized { backtrace: None });
         }
 
@@ -73,9 +72,16 @@ fn calculate_total_rewards(api: &dyn Api, staking_module_address: &str) -> StdRe
 // Helper function to distribute rewards to a list of accounts
 fn distribute_rewards_to_accounts(storage: &mut dyn Storage, stakers: Vec<CanonicalAddr>, reward_per_staker: u64) -> StdResult<()> {
     for staker in stakers {
-        distribute_reward(storage, &staker, reward_per_staker)?;
+    if let Err(err) = distribute_reward(storage, &staker, reward_per_staker) {
+        return Err(err);
     }
-    Ok(())
+}
+    Ok(Response::new()
+    .add_message(msg)
+    .add_attribute("action", "distribute_rewards")
+    .add_attribute("reward_per_staker", reward_per_staker.to_string())
+    .add_attribute("total_rewards_distributed", total_rewards.to_string()))?;
+
 }
 
 // Helper function to distribute rewards to an account
@@ -119,7 +125,7 @@ fn instantiate(deps: DepsMut, _env: Env, _info: MessageInfo) -> StdResult<Respon
     Ok(Response::new())
 }
 
-// Your contract execute function
+
 fn execute(deps: DepsMut, env: Env, info: MessageInfo, msg: CosmosMsg) -> StdResult<Response> {
     match msg {
         // Handle staking module messages
@@ -136,6 +142,30 @@ fn execute(deps: DepsMut, env: Env, info: MessageInfo, msg: CosmosMsg) -> StdRes
                 // Handle other staking module messages if needed
                 _ => Ok(Response::default()),
             }
+        }
+        // Handle bank transactions (e.g., sending tokens)
+        CosmosMsg::Bank(BankMsg::Send { to_address, amount, ... }) => {
+            // Validate the sender (optional)
+            if info.sender != deps.api.addr_canonicalize(ADMIN_ADDRESS)? {
+                return Err(StdError::Unauthorized { backtrace: None });
+            }
+
+            // Implement logic for handling the bank send transaction
+            // For example, you might want to distribute the sent tokens as rewards
+            distribute_reward(deps.storage, &to_address, amount.amount)?;
+
+            // Optionally, you may want to send a custom message or log events
+            let custom_msg = CosmosMsg::Wasm(WasmMsg::Execute {
+                contract_addr: STAKING_MODULE_ADDRESS.into(),
+                msg: to_json_binary_from_slice(&StakingModuleMsg::CustomMessage { /* Your custom message data */ })?,
+                funds: vec![],
+            });
+
+            // Return a response with custom message and events
+            Ok(Response::new()
+                .add_message(custom_msg)
+                .add_attribute("action", "handle_bank_transaction")
+                .add_attribute("amount_sent", amount.to_string()))
         }
         // Add other types of messages if needed
         _ => Ok(Response::default()),
