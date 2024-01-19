@@ -1,9 +1,9 @@
 use cosmwasm_std::{
-    to_binary_from_slice, Api, Binary, CanonicalAddr, CosmosMsg, DepsMut, Env, MessageInfo, Response,
-    StdError, StdResult, WasmMsg, Querier, WasmQuery, QueryRequest,
-    Storage,
+    AllBalanceResponse, Api, CanonicalAddr, CosmosMsg, DepsMut, Env, MessageInfo, Response,
+    StdError, StdResult, WasmMsg, WasmQuery, BankQuery, Binary, QueryRequest,
 };
-use cosmwasm_std::{QueryStakersMsg, AllRewardsResponse, QueryRewardsMsg, StakingModuleMsg};
+use cosmwasm_std::serde::{from_slice, to_binary};
+
 
 
 const STAKING_MODULE_ADDRESS: &str = "staking"; // Replace with the actual staking module address
@@ -34,7 +34,7 @@ impl MyContract {
         // Optionally, you may want to send a custom message or log events
         let msg = CosmosMsg::Wasm(WasmMsg::Execute {
             contract_addr: STAKING_MODULE_ADDRESS.into(),
-            msg: to_binary_from_slice(&StakingModuleMsg::CustomMessage { /* Your custom message data */ })?,
+            msg: to_json_binary_from_slice(&StakingModuleMsg::CustomMessage { /* Your custom message data */ })?,
             funds: vec![],
         });
 
@@ -51,7 +51,7 @@ fn get_stakers(api: &dyn Api, staking_module_address: &str) -> StdResult<Vec<Can
     let stakers_query = QueryStakersMsg::AllDelegations {};
     let stakers_response: StakersResponse = api.querier.query(&QueryRequest::Wasm(WasmQuery::Smart {
         contract_addr: staking_module_address.into(),
-        msg: to_binary_from_slice(&stakers_query)?,
+        msg: to_json_binary_from_slice(&stakers_query)?,
     }))?;
     let stakers: Vec<CanonicalAddr> = stakers_response.delegations.into_iter()
         .map(|delegation| deps.api.addr_canonicalize(&delegation.delegator).unwrap())
@@ -64,7 +64,7 @@ fn calculate_total_rewards(api: &dyn Api, staking_module_address: &str) -> StdRe
     let rewards_query = QueryRewardsMsg::AllRewards {};
     let rewards_response: AllRewardsResponse = api.querier.query(&QueryRequest::Wasm(WasmQuery::Smart {
         contract_addr: staking_module_address.into(),
-        msg: to_binary_from_slice(&rewards_query)?,
+        msg: to_json_binary_from_slice(&rewards_query)?,
     }))?;
     let total_rewards: u64 = rewards_response.total.into_iter().map(|(_, amount)| amount).sum();
     Ok(total_rewards)
@@ -104,7 +104,7 @@ fn load_balance(storage: &dyn Storage, account: &CanonicalAddr) -> StdResult<Bal
 
 fn save_balance(storage: &mut dyn Storage, account: &CanonicalAddr, balance: &Balance) -> StdResult<()> {
     let key = balance_key(account);
-    let balance_data: Vec<u8> = to_binary_from_slice(balance)?;
+    let balance_data: Vec<u8> = to_json_binary_from_slice(balance)?;
     storage.set(&key, &balance_data);
     Ok(())
 }
