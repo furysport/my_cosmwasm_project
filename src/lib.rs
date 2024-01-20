@@ -1,213 +1,134 @@
 use cosmwasm_std::{
-    to_binary, from_binary, AllBalanceResponse, Api, CanonicalAddr, CosmosMsg, DepsMut, Env,
-    MessageInfo, QueryRequest, Response, StdError, StdResult, Storage, WasmMsg, WasmQuery, to_vec, Uint128,
-    BankQuery, Binary,
-    log,
+    to_binary, CosmosMsg, Deps, DepsMut, Env, MessageInfo, Response, StdResult, WasmMsg, QueryRequest,
+    BankMsg, Uint128, Coin, QuerierWrapper, QueryWrapper, StakingQuery, StakingResponse, to_vec,
+    log, Binary, BankQuery,Cw4ExecuteMsg,
 };
-use cosmwasm_std::{
-    AllBalanceResponse, Api, CanonicalAddr, CosmosMsg, DepsMut, Env, MessageInfo, Response,
-    StdError, StdResult, WasmMsg, WasmQuery, BankQuery, Binary, QueryRequest, QueryStakersMsg, QueryRewardsMsg, StakingModuleMsg
-};
-use cosmwasm_std::{AllBalanceResponse, to_binary, from_binary, Storage};
-use cosmwasm_std::query::QueryResponse;
 
+use cw4::{Cw4ExecuteMsg, Cw4QueryMsg};
 
-const STAKING_MODULE_ADDRESS: &str = "staking"; // Replace with the actual staking module address
-const ADMIN_ADDRESS: &str = "admin"; // Replace with the contract admin address
-
-// Define your contract struct with necessary state
-#[derive(Default)]
-struct MyContract;
-
-pub struct Staker {
-    pub address: CanonicalAddr,
-    pub rewards: Uint128,
+#[derive(Debug, Clone)]
+struct StakerInfo {
+    address: String,
+    share: Uint128,
 }
 
-pub struct State {
-    pub stakers: Vec<Staker>,
+#[derive(Debug, Clone)]
+struct StakersQueryResponse {
+    stakers: Vec<StakerInfo>,
+    total_share: Uint128,
 }
 
-impl Default for State {
-    fn default() -> Self {
-        State { stakers: vec![] }
-    }
+#[derive(Debug, Clone)]
+struct InstantiateMsg {
+    cw4_contract_address: String,
 }
 
-// Implement the contract
-impl MyContract {
-    fn distribute_rewards(deps: DepsMut, env: Env, info: MessageInfo) -> StdResult<Response> {
-        // Check if the sender is the contract admin
-        if info.sender != deps.api.addr_canonicalize(ADMIN_ADDRESS)? {
-            return Err(StdError::Unauthorized { backtrace: None });
+#[derive(Debug, Clone)]
+enum ExecuteMsg {
+    UpdateGroup(Vec<StakerInfo>), // Add a new variant to store staker information
+}
+
+#[derive(Debug, Clone)]
+enum QueryMsg {
+    Stakers {},
+}
+
+impl StakersQueryResponse {
+    fn new() -> Self {
+        StakersQueryResponse {
+            stakers: Vec::new(),
+            total_share: Uint128::zero(),
         }
+    }
 
-        // Fetch the list of stakers
-        let stakers = get_stakers(deps.api, STAKING_MODULE_ADDRESS)?;
-
-        // Calculate rewards for stakers
-        let total_rewards = calculate_total_rewards(deps.api, STAKING_MODULE_ADDRESS)?;
-        let reward_per_staker = total_rewards / stakers.len() as u64;
-
-        // Distribute rewards to stakers
-        distribute_rewards_to_accounts(deps.storage, stakers, reward_per_staker)?;
-
-        // Optionally, you may want to send a custom message or log events
-        let msg = CosmosMsg::Wasm(WasmMsg::Execute {
-            contract_addr: STAKING_MODULE_ADDRESS.into(),
-            msg: to_binary(&StakingModuleMsg::CustomMessage { /* Your custom message data */ })?,
-            funds: vec![],
-        });
-
-        // Return a response with custom message and events
-        Ok(Response::new()
-            .add_message(msg)
-            .add_attribute("action", "distribute_rewards")
-            .add_attribute("reward_per_staker", reward_per_staker.to_string()))
+    fn add_staker(&mut self, address: String, share: Uint128) {
+        self.stakers.push(StakerInfo { address, share });
+        self.total_share += share;
     }
 }
 
-// Helper function to distribute rewards to a list of accounts
-fn distribute_rewards_to_accounts(
-    storage: &mut dyn Storage,
-    stakers: Vec<CanonicalAddr>,
-    reward_per_staker: u64,
+impl StakerInfo {
+    fn to_binary(&self) -> StdResult<Binary> {
+        to_binary(&self)
+    }
+}
+
+impl From<&StakerInfo> for Binary {
+    fn from(staker_info: &StakerInfo) -> Self {
+        to_vec(staker_info).unwrap().into()
+    }
+}
+
+impl Into<StakerInfo> for Binary {
+    fn into(self) -> StakerInfo {
+        from_slice(&self).unwrap()
+    }
+}
+
+// Implement the contract execution logic
+pub fn execute(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    msg: ExecuteMsg,
 ) -> StdResult<Response> {
-    let mut total_rewards = 0u64;
-
-    for staker in stakers.iter() {
-        distribute_reward(storage, staker, reward_per_staker)?;
-
-        // Accumulate rewards for total_rewards attribute
-        total_rewards += reward_per_staker;
-    }
-
-    // Log the total rewards distributed
-    log(&format!(
-        "Distributed total rewards: {}",
-        total_rewards
-    ));
-
-    Ok(Response::new()
-        .add_attribute("action", "distribute_rewards")
-        .add_attribute("reward_per_staker", reward_per_staker.to_string())
-        .add_attribute("total_rewards_distributed", total_rewards.to_string())?)
-}
-
-fn get_stakers(api: &dyn Api, staking_module_address: &str) -> StdResult<Vec<CanonicalAddr>> {
-    let stakers_query = QueryStakersMsg::AllDelegations {};
-    let stakers_response: StakersResponse = api.querier.query(&QueryRequest::Wasm(WasmQuery::Smart {
-        contract_addr: staking_module_address.into(),
-        msg: to_binary(&stakers_query)?,
-    }))?;
-    let stakers: Vec<CanonicalAddr> = stakers_response.delegations.into_iter()
-        .map(|delegation| api.addr_canonicalize(&delegation.delegator).unwrap())
-        .collect();
-    Ok(stakers)
-}
-
-// Helper function to calculate the total rewards available for distribution
-fn calculate_total_rewards(api: &dyn Api, staking_module_address: &str) -> StdResult<u64> {
-    let rewards_query = QueryRewardsMsg::AllRewards {};
-    let rewards_response: AllRewardsResponse = api.querier.query(&QueryRequest::Wasm(WasmQuery::Smart {
-        contract_addr: staking_module_address.into(),
-        msg: to_binary(&rewards_query)?,
-    }))?;
-    let total_rewards: u64 = rewards_response.total.into_iter().map(|(_, amount)| amount).sum();
-    Ok(total_rewards)
-}
-
-// Helper function to distribute rewards to an account
-fn distribute_reward(storage: &mut dyn Storage, account: &CanonicalAddr, amount: u64) -> StdResult<()> {
-    // Load or initialize the state
-    let mut state: State = load_state(storage)?;
-
-    // Find the staker in the state
-    if let Some(staker) = state.stakers.iter_mut().find(|s| &s.address == account) {
-        // Add reward to the staker's balance
-        staker.rewards += Uint128::from(amount);
-    } else {
-        // If the staker is not found, add them to the state with the reward
-        let new_staker = Staker {
-            address: account.clone(),
-            rewards: Uint128::from(amount),
-        };
-        state.stakers.push(new_staker);
-    }
-
-    // Save the updated state to storage
-    save_state(storage, &state)?;
-
-    Ok(())
-}
-
-// Helper function to load the contract state from storage
-fn load_state(storage: &dyn Storage) -> StdResult<State> {
-    let key = to_vec(&b"state"[..]);
-    match storage.get(&key) {
-        Some(data) => from_binary(&data),
-        None => Ok(Default::default()),
-    }
-}
-
-// Helper function to save the contract state to storage
-fn save_state(storage: &mut dyn Storage, state: &State) -> StdResult<()> {
-    let key = to_vec(&b"state"[..]);
-    let state_data: Vec<u8> = to_binary(state)?;
-    storage.set(&key, &state_data);
-    Ok(())
-}
-
-
-// Your contract instantiate function
-fn instantiate(deps: DepsMut, _env: Env, _info: MessageInfo) -> StdResult<Response> {
-    // Perform any necessary setup during contract instantiation
-    Ok(Response::new())
-}
-
-
-fn execute(deps: DepsMut, env: Env, info: MessageInfo, msg: CosmosMsg) -> StdResult<Response> {
     match msg {
-        // Handle staking module messages
-        CosmosMsg::Wasm(WasmMsg::Execute { contract_addr, msg, funds }) => {
-            let staking_msg: StakingModuleMsg = from_binary(&msg)?;
+        ExecuteMsg::UpdateGroup(stakers) => {
+            // Vector to store CW4 execute messages
+            let mut cw4_messages: Vec<CosmosMsg> = Vec::new();
 
-            match staking_msg {
-                StakingModuleMsg::CustomMessage { /* Your custom message data */ } => {
-                    // Implement your custom message logic
-                    // ...
+            // Iterate through stakers and accumulate CW4 messages
+            for staker_info in stakers.iter() {
+                let staker_address = staker_info.address.clone();
+                let staker_share = staker_info.share.clone();
+                let percentage = (staker_share / stakers_query_response.total_share) * Uint128::new(100);
 
-                    Ok(Response::default())
-                }
-                // Handle other staking module messages if needed
-                _ => Ok(Response::default()),
+                // Create a Cw4ExecuteMsg::Mint message
+                let mint_msg = Cw4ExecuteMsg::Mint {
+                    address: staker_address.clone(),
+                    amount: percentage,
+                };
+
+                // Create a WasmMsg::Execute message for CW4 contract
+                let cw4_msg = CosmosMsg::Wasm(WasmMsg::Execute {
+                    contract_addr: stakers_query_response.cw4_contract_address.clone().into(),
+                    funds: vec![],
+                    msg: to_binary(&mint_msg)?,
+                });
+
+                // Push the CW4 message to the vector
+                cw4_messages.push(cw4_msg);
             }
+
+            // Execute all accumulated CW4 messages in a single transaction
+            let response = Response::new().add_messages(cw4_messages);
+            return Ok(response);
         }
-        // Handle bank transactions (e.g., sending tokens)
-        CosmosMsg::Bank(BankMsg::Send { to_address, amount, .. }) => {
-            // Validate the sender (optional)
-            if info.sender != deps.api.addr_canonicalize(ADMIN_ADDRESS)? {
-                return Err(StdError::Unauthorized { backtrace: None });
-            }
-
-            // Implement logic for handling the bank send transaction
-            // For example, you might want to distribute the sent tokens as rewards
-            distribute_reward(deps.storage, &to_address, amount.amount)?;
-
-            // Optionally, you may want to send a custom message or log events
-            let custom_msg = CosmosMsg::Wasm(WasmMsg::Execute {
-                contract_addr: STAKING_MODULE_ADDRESS.into(),
-                msg: to_json_binary_from_slice(&StakingModuleMsg::CustomMessage { /* Your custom message data */ })?,
-                funds: vec![],
-            });
-
-            // Return a response with custom message and events
-            Ok(Response::new()
-                .add_message(custom_msg)
-                .add_attribute("action", "handle_bank_transaction")
-                .add_attribute("amount_sent", amount.to_string()))
-        }
-        // Add other types of messages if needed
-        _ => Ok(Response::default()),
     }
+}
+
+// Implement the contract query logic
+pub fn query(deps: Deps, env: Env, msg: QueryMsg) -> StdResult<Binary> {
+    match msg {
+        QueryMsg::Stakers {} => {
+            // Query native token stakers and their shares
+            let stakers_query_response = query_native_stakers(deps)?;
+
+            // Convert the response to binary
+            to_binary(&stakers_query_response)
+        }
+    }
+}
+
+fn query_native_stakers(deps: Deps) -> StdResult<StakersQueryResponse> {
+    // Use deps.querier.query to query the native token staking module
+    let staking_response: StakingResponse = deps.querier.query(&QueryRequest::Staking(StakingQuery::Validators {}))?;
+
+    let mut stakers_query_response = StakersQueryResponse::new();
+
+    for validator in staking_response.validators {
+        stakers_query_response.add_staker(validator.delegator_address, validator.delegator_shares);
+    }
+
+    Ok(stakers_query_response)
 }
